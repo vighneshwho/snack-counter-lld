@@ -1,4 +1,5 @@
 import { accountingMonth, BudgetService } from "./budget-service.ts";
+import type { ChatService } from "./chat-service.ts";
 import {
   isActiveAssignment,
   type AssignmentEvent,
@@ -13,11 +14,13 @@ export class AssignmentService {
   private readonly store: InMemoryStore;
   private readonly selection: VolunteerSelectionService;
   private readonly budget: BudgetService;
+  private readonly chat?: ChatService;
 
-  constructor(store: InMemoryStore, budget = new BudgetService(store)) {
+  constructor(store: InMemoryStore, budget = new BudgetService(store), chat?: ChatService) {
     this.store = store;
     this.selection = new VolunteerSelectionService(store);
     this.budget = budget;
+    this.chat = chat;
   }
 
   /** Reads the latest requirements, including boxes reported after an offer or acceptance. */
@@ -34,7 +37,9 @@ export class AssignmentService {
     if (job.status !== "OPEN") {
       throw new Error(`Job ${jobId} must be OPEN to offer it`);
     }
-    return this.offerNext(job);
+    this.offerNext(job);
+    this.notifyOffer(job);
+    return job;
   }
 
   acceptOffer(jobId: RefillJob["id"], volunteerId: Employee["id"]): RefillJob {
@@ -50,6 +55,12 @@ export class AssignmentService {
     job.assignedVolunteerId = volunteerId;
     delete job.offeredVolunteerId;
     this.recordEvent(job, "ACCEPTED", volunteerId);
+    this.chat?.send({
+      type: "JOB_ACCEPTED",
+      recipientId: volunteerId,
+      jobId,
+      message: "You accepted the refill job.",
+    });
     return job;
   }
 
@@ -89,6 +100,12 @@ export class AssignmentService {
     this.budget.reconcilePurchase(job, details);
     job.status = "COMPLETED";
     job.completedAt = new Date();
+    this.chat?.send({
+      type: "JOB_COMPLETED",
+      recipientId: volunteerId,
+      jobId,
+      message: "Your refill is complete and your purchase expense was recorded.",
+    });
     return job;
   }
 
@@ -124,10 +141,20 @@ export class AssignmentService {
     job.status = "OPEN";
     delete job.offeredVolunteerId;
     delete job.assignedVolunteerId;
-    return this.offerNext(job);
+    this.offerNext(job);
+    this.chat?.send({
+      type: event === "DECLINED" ? "JOB_DECLINED" : "JOB_REASSIGNED",
+      recipientId: volunteerId,
+      jobId: job.id,
+      message: event === "DECLINED"
+        ? "Your decline was recorded."
+        : "You were removed from the refill job during manual reassignment.",
+    });
+    this.notifyOffer(job);
+    return job;
   }
 
-  private offerNext(job: RefillJob): RefillJob {
+  private offerNext(job: RefillJob): void {
     const volunteer = this.selection.selectVolunteer(job);
     job.needsAttention = volunteer === undefined;
     if (volunteer) {
@@ -135,7 +162,17 @@ export class AssignmentService {
       job.offeredVolunteerId = volunteer.id;
       this.recordEvent(job, "OFFERED", volunteer.id);
     }
-    return job;
+  }
+
+  private notifyOffer(job: RefillJob): void {
+    if (job.offeredVolunteerId !== undefined) {
+      this.chat?.send({
+        type: "JOB_OFFERED",
+        recipientId: job.offeredVolunteerId,
+        jobId: job.id,
+        message: `You were offered a refill job for these boxes (${[...job.snackBoxIds].join(", ")}).`,
+      });
+    }
   }
 
   private recordEvent(job: RefillJob, type: AssignmentEvent["type"], volunteerId: Employee["id"]) {

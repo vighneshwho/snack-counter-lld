@@ -85,3 +85,7 @@ export interface PurchaseDetails {
 export interface PurchaseExpense extends BudgetEntry, PurchaseDetails {
   overrun: boolean;
 }
+
+export type ReimbursementRecord =
+  | { jobId: RefillJob["id"]; status: "SUBMITTED"; claimId: string }
+  | { jobId: RefillJob["id"]; status: "FAILED"; reason: string; retryable: boolean };

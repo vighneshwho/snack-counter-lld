@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { accountingMonth, BudgetService } from "./budget-service.ts";
+import type { ChatService } from "./chat-service.ts";
 import type { EmptyBoxReport, RefillJob, RefillJobStatus, SnackBox } from "./domain.ts";
 import type { InMemoryStore } from "./store.ts";
 
@@ -8,10 +9,12 @@ const collectingStatuses = new Set<RefillJobStatus>(["OPEN", "OFFERED", "ASSIGNE
 export class RefillService {
   private readonly store: InMemoryStore;
   private readonly budget: BudgetService;
+  private readonly chat?: ChatService;
 
-  constructor(store: InMemoryStore, budget = new BudgetService(store)) {
+  constructor(store: InMemoryStore, budget = new BudgetService(store), chat?: ChatService) {
     this.store = store;
     this.budget = budget;
+    this.chat = chat;
   }
 
   reportEmpty(boxId: SnackBox["id"], asOf: Date = new Date()): RefillJob {
@@ -67,6 +70,20 @@ export class RefillService {
       reportedAt: new Date(asOf),
     };
     this.store.emptyBoxReports.set(report.id, report);
+
+    if (!activeJob && this.chat) {
+      const recipientId = job.status === "OFFERED" ? job.offeredVolunteerId
+        : job.status === "ASSIGNED" ? job.assignedVolunteerId
+          : undefined;
+      if (recipientId !== undefined) {
+        this.chat.send({
+          type: "JOB_BOXES_UPDATED",
+          recipientId,
+          jobId: job.id,
+          message: `The latest box list for your refill is ${[...job.snackBoxIds].join(", ")}.`,
+        });
+      }
+    }
     return job;
   }
 

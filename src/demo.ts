@@ -1,7 +1,10 @@
 import { AssignmentService } from "./assignment-service.ts";
 import { accountingMonth, BudgetService } from "./budget-service.ts";
+import { MockChatService } from "./chat-service.ts";
 import type { Attendance, Employee, Office, RefillJob, SnackBox } from "./domain.ts";
+import { MockHRService } from "./hr-service.ts";
 import { RefillService } from "./refill-service.ts";
+import { ReimbursementService } from "./reimbursement-service.ts";
 import { InMemoryStore } from "./store.ts";
 import { VolunteerSelectionService } from "./volunteer-selection-service.ts";
 
@@ -94,9 +97,12 @@ for (const employee of nonVolunteers) {
 }
 
 const budget = new BudgetService(store);
-const service = new RefillService(store, budget);
+const chat = new MockChatService();
+const hr = new MockHRService();
+const service = new RefillService(store, budget, chat);
 const volunteerSelection = new VolunteerSelectionService(store);
-const assignments = new AssignmentService(store, budget);
+const assignments = new AssignmentService(store, budget, chat);
+const reimbursements = new ReimbursementService(store, hr, chat);
 const budgetDate = new Date();
 const month = accountingMonth(budgetDate);
 
@@ -292,3 +298,16 @@ nextMonth.setUTCMonth(nextMonth.getUTCMonth() + 1);
 console.log("\n16. The next month opens with its full budget. This month's expense stays on record.");
 printBudget(blockedJob.officeId, accountingMonth(nextMonth));
 printBudget(blockedJob.officeId);
+
+console.log("\n17. Submit the completed Oslo and Bengaluru refills to mock HR.");
+const claims = await Promise.all([
+  reimbursements.submitClaim(osloJob.id),
+  reimbursements.submitClaim(blockedJob.id),
+]);
+console.table(claims);
+
+console.log("Mock chat outbox");
+for (const notification of chat.notifications) {
+  const recipient = store.employees.get(notification.recipientId)?.name ?? notification.recipientId;
+  console.log(`[${notification.type}] ${recipient} — ${notification.message}`);
+}

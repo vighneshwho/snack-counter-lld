@@ -1,4 +1,12 @@
-import type { BudgetEntry, Currency, Office, PurchaseDetails, RefillJob, SnackBox } from "./domain.ts";
+import type {
+  BudgetEntry,
+  Currency,
+  Office,
+  PurchaseDetails,
+  PurchaseExpense,
+  RefillJob,
+  SnackBox,
+} from "./domain.ts";
 import type { InMemoryStore } from "./store.ts";
 
 interface BudgetBalance {
@@ -20,7 +28,7 @@ function requireMinorUnits(amount: number): number {
   return amount;
 }
 
-function validateMonth(month: string): void {
+export function validateAccountingMonth(month: string): void {
   if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) {
     throw new Error(`Invalid accounting month: ${month}`);
   }
@@ -35,11 +43,30 @@ export class BudgetService {
 
   getBalance(officeId: Office["id"], month: string): BudgetBalance {
     this.syncMonth(officeId, month);
-    return this.calculateBalance(officeId, month);
+    return this.readBalance(officeId, month);
+  }
+
+  /** Reads the ledger without advancing the month or funding blocked jobs. */
+  readBalance(officeId: Office["id"], month: string): BudgetBalance {
+    validateAccountingMonth(month);
+    const office = this.store.offices.get(officeId);
+    if (!office) {
+      throw new Error(`Unknown office: ${officeId}`);
+    }
+    const budgetMinor = requireMinorUnits(Math.round(office.monthlyBudget * 100));
+    const reservedMinor = this.sumMonth(this.store.budgetReservations, officeId, month);
+    const spentMinor = this.sumMonth(this.store.purchaseExpenses, officeId, month);
+    return {
+      currency: office.currency,
+      budgetMinor,
+      reservedMinor,
+      spentMinor,
+      availableMinor: budgetMinor - reservedMinor - spentMinor,
+    };
   }
 
   syncMonth(officeId: Office["id"], month: string): void {
-    validateMonth(month);
+    validateAccountingMonth(month);
     const latest = this.store.latestBudgetMonths.get(officeId);
     if (latest === undefined || month > latest) {
       this.recheckBlockedJobs(officeId, month);
@@ -53,7 +80,7 @@ export class BudgetService {
   }
 
   reserveForPurchase(job: RefillJob, month: string): void {
-    validateMonth(month);
+    validateAccountingMonth(month);
     const reservation = this.requireReservation(job);
     // Replacing the entry moves the full reservation only after the target month can cover it.
     const funded = reservation.month === month || this.tryReserve(job, reservation.amountMinor, month);
@@ -64,7 +91,7 @@ export class BudgetService {
   }
 
   releaseReservation(job: RefillJob, month: string): void {
-    validateMonth(month);
+    validateAccountingMonth(month);
     this.store.budgetReservations.delete(job.id);
     this.recheckBlockedJobs(job.officeId, month);
   }
@@ -81,9 +108,8 @@ export class BudgetService {
       throw new Error("A valid purchase date is required");
     }
     const purchaseMonth = accountingMonth(purchaseDate);
-    validateMonth(purchaseMonth);
     const reservation = this.requireReservation(job);
-    const balance = this.calculateBalance(job.officeId, purchaseMonth);
+    const balance = this.readBalance(job.officeId, purchaseMonth);
     if (currency !== balance.currency) {
       throw new Error(`Purchase currency must match the office currency (${balance.currency})`);
     }
@@ -91,8 +117,7 @@ export class BudgetService {
     const overrun = amountMinor > reservation.amountMinor ||
       amountMinor > balance.availableMinor + reservedThisMonth;
 
-    // Post the actual cost before giving the blocked job a chance to claim any released funds.
-    this.store.purchaseExpenses.set(job.id, {
+    const expense: PurchaseExpense = {
       officeId: job.officeId,
       month: purchaseMonth,
       amountMinor,
@@ -100,14 +125,28 @@ export class BudgetService {
       receiptReference,
       purchaseDate: new Date(purchaseDate),
       overrun,
-    });
+    };
+    if (details.items) {
+      expense.items = details.items.map(({ snackBoxId, quantity, unit }) => {
+        if (!job.snackBoxIds.has(snackBoxId)) {
+          throw new Error(`Purchase item must reference a box in the refill job: ${snackBoxId}`);
+        }
+        if (!Number.isFinite(quantity) || quantity <= 0 || typeof unit !== "string" || unit.trim() === "") {
+          throw new Error("Purchase items require a positive quantity and a unit");
+        }
+        return { snackBoxId, quantity, unit: unit.trim() };
+      });
+    }
+
+    // Post the actual cost before giving the blocked job a chance to claim any released funds.
+    this.store.purchaseExpenses.set(job.id, expense);
     this.store.budgetReservations.delete(job.id);
     const latestAffectedMonth = reservation.month > purchaseMonth ? reservation.month : purchaseMonth;
     this.recheckBlockedJobs(job.officeId, latestAffectedMonth);
   }
 
   recheckBlockedJobs(officeId: Office["id"], month: string): void {
-    validateMonth(month);
+    validateAccountingMonth(month);
     if (!this.store.offices.has(officeId)) {
       throw new Error(`Unknown office: ${officeId}`);
     }
@@ -147,7 +186,7 @@ export class BudgetService {
 
   private tryReserve(job: RefillJob, amountMinor: number, month: string): boolean {
     requireMinorUnits(amountMinor);
-    const balance = this.calculateBalance(job.officeId, month);
+    const balance = this.readBalance(job.officeId, month);
     const current = this.store.budgetReservations.get(job.id);
     // A resize in the same month replaces the amount already committed to this job.
     const alreadyReserved = current?.month === month ? current.amountMinor : 0;
@@ -156,23 +195,6 @@ export class BudgetService {
     }
     this.store.budgetReservations.set(job.id, { officeId: job.officeId, month, amountMinor });
     return true;
-  }
-
-  private calculateBalance(officeId: Office["id"], month: string): BudgetBalance {
-    const office = this.store.offices.get(officeId);
-    if (!office) {
-      throw new Error(`Unknown office: ${officeId}`);
-    }
-    const budgetMinor = requireMinorUnits(Math.round(office.monthlyBudget * 100));
-    const reservedMinor = this.sumMonth(this.store.budgetReservations, officeId, month);
-    const spentMinor = this.sumMonth(this.store.purchaseExpenses, officeId, month);
-    return {
-      currency: office.currency,
-      budgetMinor,
-      reservedMinor,
-      spentMinor,
-      availableMinor: budgetMinor - reservedMinor - spentMinor,
-    };
   }
 
   private sumMonth(entries: ReadonlyMap<string, BudgetEntry>, officeId: string, month: string): number {

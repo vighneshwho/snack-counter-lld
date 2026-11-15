@@ -75,11 +75,18 @@ export interface BudgetEntry {
   amountMinor: number;
 }
 
+export interface PurchaseItem {
+  snackBoxId: SnackBox["id"];
+  quantity: number;
+  unit: string;
+}
+
 export interface PurchaseDetails {
   amountMinor: number;
   currency: Currency;
   receiptReference: string;
   purchaseDate: Date;
+  items?: PurchaseItem[];
 }
 
 export interface PurchaseExpense extends BudgetEntry, PurchaseDetails {

@@ -5,6 +5,7 @@ import type { Attendance, Employee, Office, RefillJob, SnackBox } from "./domain
 import { MockHRService } from "./hr-service.ts";
 import { RefillService } from "./refill-service.ts";
 import { ReimbursementService } from "./reimbursement-service.ts";
+import { ReportingService } from "./reporting-service.ts";
 import { InMemoryStore } from "./store.ts";
 import { VolunteerSelectionService } from "./volunteer-selection-service.ts";
 
@@ -205,6 +206,10 @@ assignments.completeJob(osloJob.id, shopper.id, {
   currency: "NOK",
   receiptReference: "demo-receipts/oslo-supermarket.jpg",
   purchaseDate: budgetDate,
+  items: [
+    { snackBoxId: "oslo-biscuits", quantity: 12, unit: "packs" },
+    { snackBoxId: "oslo-chocolate", quantity: 20, unit: "bars" },
+  ],
 });
 service.reportEmpty("oslo-biscuits", budgetDate);
 printSnapshot(`9. ${shopper.name} completes the refill. A later biscuits report joins Oslo's open job.`);
@@ -287,6 +292,10 @@ assignments.completeJob(blockedJob.id, bengaluruShopper.id, {
   currency: "INR",
   receiptReference: "demo-receipts/bengaluru-wholesale.jpg",
   purchaseDate: budgetDate,
+  items: [
+    { snackBoxId: "bengaluru-chikki", quantity: 35, unit: "packs" },
+    { snackBoxId: "bengaluru-makhana", quantity: 15, unit: "packs" },
+  ],
 });
 console.log(`\n15. ${bengaluruShopper.name} submits the receipt. The actual expense replaces the reservation.`);
 printExpense(blockedJob.id);
@@ -311,3 +320,27 @@ for (const notification of chat.notifications) {
   const recipient = store.employees.get(notification.recipientId)?.name ?? notification.recipientId;
   console.log(`[${notification.type}] ${recipient} — ${notification.message}`);
 }
+
+const reporting = new ReportingService(store);
+const monthlyReport = reporting.getMonthlyReport(month, "NOK", {
+  from: "INR", to: "NOK", numerator: 1, denominator: 8,
+});
+console.log(`\n18. Monthly spending and refill report for ${monthlyReport.month}.`);
+console.table(monthlyReport.offices.map((office) => ({
+  office: office.name,
+  currency: office.currency,
+  budget: (office.budgetMinor / 100).toFixed(2),
+  spent: (office.spentMinor / 100).toFixed(2),
+  remaining: (office.remainingMinor / 100).toFixed(2),
+  completedRefills: office.completedRefillJobs,
+})));
+const { currency, spentMinor } = monthlyReport.consolidated;
+console.log(
+  `Consolidated spending is ${currency} ${(spentMinor / 100).toFixed(2)} using a demo rate of 1 NOK per 8 INR.`,
+);
+console.table(monthlyReport.snackInsights.map((snack) => ({
+  snack: snack.snackType,
+  refilledBoxes: snack.refillCount,
+  recordedQuantities: snack.recordedQuantities
+    .map(({ unit, quantity }) => `${quantity} ${unit}`).join(", ") || "Unrecorded",
+})));

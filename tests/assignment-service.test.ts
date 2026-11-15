@@ -1,10 +1,16 @@
 import { describe, expect, it } from "vitest";
 import { AssignmentService } from "../src/assignment-service.ts";
-import type { Employee, Office } from "../src/domain.ts";
+import type { Employee, Office, PurchaseDetails } from "../src/domain.ts";
 import { RefillService } from "../src/refill-service.ts";
 import { InMemoryStore } from "../src/store.ts";
 
 const oslo: Office = { id: "oslo", name: "Oslo", currency: "NOK", monthlyBudget: 6_000 };
+const receipt: PurchaseDetails = {
+  amountMinor: 40_000,
+  currency: "NOK",
+  receiptReference: "receipt-001.jpg",
+  purchaseDate: new Date(),
+};
 
 function volunteer(id: string): Employee {
   return {
@@ -43,7 +49,7 @@ describe("AssignmentService", () => {
     });
     expect(job.offeredVolunteerId).toBeUndefined();
     expect(assignments.startPurchase(job.id, "ada").status).toBe("IN_PROGRESS");
-    expect(assignments.completeJob(job.id, "ada")).toMatchObject({
+    expect(assignments.completeJob(job.id, "ada", receipt)).toMatchObject({
       status: "COMPLETED", assignedVolunteerId: "ada", completedAt: expect.any(Date),
     });
     expect(job.assignmentHistory).toEqual([
@@ -144,15 +150,15 @@ describe("AssignmentService", () => {
     assignments.acceptOffer(job.id, "ada");
     expect(() => assignments.declineOffer(job.id, "ada")).toThrow(/current offer recipient/);
     expect(() => assignments.startPurchase(job.id, "liv")).toThrow(/assigned volunteer/);
-    expect(() => assignments.completeJob(job.id, "ada")).toThrow(/IN_PROGRESS job/);
+    expect(() => assignments.completeJob(job.id, "ada", receipt)).toThrow(/IN_PROGRESS job/);
     assignments.startPurchase(job.id, "ada");
     const purchasing = structuredClone(job);
     expect(() => assignments.reassignJob(job.id)).toThrow(/OFFERED or ASSIGNED/);
-    expect(() => assignments.completeJob(job.id, "liv")).toThrow(/assigned volunteer/);
+    expect(() => assignments.completeJob(job.id, "liv", receipt)).toThrow(/assigned volunteer/);
     expect(job).toEqual(purchasing);
-    assignments.completeJob(job.id, "ada");
+    assignments.completeJob(job.id, "ada", receipt);
     expect(() => assignments.reassignJob(job.id)).toThrow(/OFFERED or ASSIGNED/);
-    expect(() => assignments.completeJob(job.id, "ada")).toThrow(/IN_PROGRESS job/);
+    expect(() => assignments.completeJob(job.id, "ada", receipt)).toThrow(/IN_PROGRESS job/);
   });
 
   it("accepts a contested job only once when responses are queued together", async () => {
@@ -190,7 +196,7 @@ describe("AssignmentService", () => {
     expect(otherJob.assignmentHistory).toHaveLength(1);
     assignments.startPurchase(job.id, "ada");
     expect(() => assignments.acceptOffer(otherJob.id, "ada")).toThrow(/active refill assignment/);
-    assignments.completeJob(job.id, "ada");
+    assignments.completeJob(job.id, "ada", receipt);
     expect(assignments.acceptOffer(otherJob.id, "ada").status).toBe("ASSIGNED");
   });
 

@@ -74,3 +74,14 @@ export interface BudgetEntry {
   month: string;
   amountMinor: number;
 }
+
+export interface PurchaseDetails {
+  amountMinor: number;
+  currency: Currency;
+  receiptReference: string;
+  purchaseDate: Date;
+}
+
+export interface PurchaseExpense extends BudgetEntry, PurchaseDetails {
+  overrun: boolean;
+}

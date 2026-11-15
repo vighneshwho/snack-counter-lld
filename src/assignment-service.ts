@@ -3,6 +3,7 @@ import {
   isActiveAssignment,
   type AssignmentEvent,
   type Employee,
+  type PurchaseDetails,
   type RefillJob,
 } from "./domain.ts";
 import type { InMemoryStore } from "./store.ts";
@@ -74,21 +75,20 @@ export class AssignmentService {
     if (job.status !== "ASSIGNED" || job.assignedVolunteerId !== volunteerId) {
       throw new Error(`Only the assigned volunteer can start purchasing for an ASSIGNED job: ${jobId}`);
     }
-    this.budget.requireReservation(job);
-    this.budget.syncMonth(job.officeId, accountingMonth(asOf));
+    this.budget.reserveForPurchase(job, accountingMonth(asOf));
     // RefillService uses IN_PROGRESS to route new boxes to another job.
     job.status = "IN_PROGRESS";
     return job;
   }
 
-  completeJob(jobId: RefillJob["id"], volunteerId: Employee["id"], asOf: Date = new Date()): RefillJob {
+  completeJob(jobId: RefillJob["id"], volunteerId: Employee["id"], details: PurchaseDetails): RefillJob {
     const job = this.getJob(jobId);
     if (job.status !== "IN_PROGRESS" || job.assignedVolunteerId !== volunteerId) {
       throw new Error(`Only the assigned volunteer can complete an IN_PROGRESS job: ${jobId}`);
     }
-    this.budget.reconcilePurchase(job, accountingMonth(asOf));
+    this.budget.reconcilePurchase(job, details);
     job.status = "COMPLETED";
-    job.completedAt = new Date(asOf);
+    job.completedAt = new Date();
     return job;
   }
 

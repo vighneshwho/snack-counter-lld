@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { AssignmentService } from "../src/assignment-service.ts";
-import { BudgetService, simulatePurchasePrice } from "../src/budget-service.ts";
-import type { Office, RefillJob } from "../src/domain.ts";
+import { BudgetService } from "../src/budget-service.ts";
+import type { Office, PurchaseDetails, RefillJob } from "../src/domain.ts";
 import { RefillService } from "../src/refill-service.ts";
 import { InMemoryStore } from "../src/store.ts";
 
@@ -11,7 +11,11 @@ const oslo: Office = { id: "oslo", name: "Oslo", currency: "NOK", monthlyBudget:
 const bengaluru: Office = { id: "bengaluru", name: "Bengaluru", currency: "INR", monthlyBudget: 15_000 };
 const volunteerId = "ada";
 
-function setup(simulatePrice: (estimate: number) => number = (estimate) => estimate) {
+function receipt(amountMinor: number, purchaseDate = november): PurchaseDetails {
+  return { amountMinor, currency: "NOK", receiptReference: "receipt-001.jpg", purchaseDate };
+}
+
+function setup() {
   const store = new InMemoryStore();
   store.offices.set(oslo.id, oslo);
   store.offices.set(bengaluru.id, bengaluru);
@@ -22,7 +26,7 @@ function setup(simulatePrice: (estimate: number) => number = (estimate) => estim
     isVolunteer: true,
     attendance: { status: "ON_SITE", officeId: oslo.id },
   });
-  const budget = new BudgetService(store, simulatePrice);
+  const budget = new BudgetService(store);
   const refills = new RefillService(store, budget);
   const assignments = new AssignmentService(store, budget);
 
@@ -156,18 +160,21 @@ describe("Refill budget management", () => {
   });
 
   it("reconciles a cheaper purchase and funds the blocked job from the savings", () => {
-    const { refills, assignments, start, budget, store, addBox } = setup(() => 540_000);
+    const { refills, assignments, start, budget, store, addBox } = setup();
     addBox("biscuits", 600_000);
     addBox("nuts", 60_000);
     const funded = refills.reportEmpty("biscuits", november);
     const blocked = refills.reportEmpty("nuts", november);
     start(funded);
 
-    assignments.completeJob(funded.id, volunteerId, november);
+    const details = receipt(540_000);
+    assignments.completeJob(funded.id, volunteerId, details);
 
     expect(funded.status).toBe("COMPLETED");
     expect(store.budgetReservations.has(funded.id)).toBe(false);
-    expect(store.purchaseExpenses.get(funded.id)?.amountMinor).toBe(540_000);
+    expect(store.purchaseExpenses.get(funded.id)).toEqual({
+      ...details, officeId: oslo.id, month: "2026-11", overrun: false,
+    });
     expect(blocked.status).toBe("OPEN");
     expect(budget.getBalance(oslo.id, "2026-11")).toMatchObject({
       reservedMinor: 60_000, spentMinor: 540_000, availableMinor: 0,
@@ -175,7 +182,7 @@ describe("Refill budget management", () => {
   });
 
   it("leaves all boxes blocked when released funds can cover only some of them", () => {
-    const { refills, assignments, start, budget, store, addBox } = setup(() => 540_000);
+    const { refills, assignments, start, budget, store, addBox } = setup();
     addBox("biscuits", 600_000);
     addBox("nuts", 60_000);
     addBox("chocolate", 20_000);
@@ -184,7 +191,7 @@ describe("Refill budget management", () => {
     refills.reportEmpty("chocolate", november);
     start(funded);
 
-    assignments.completeJob(funded.id, volunteerId, november);
+    assignments.completeJob(funded.id, volunteerId, receipt(540_000));
     budget.recheckBlockedJobs(oslo.id, "2026-11");
 
     expect(blocked.status).toBe("BUDGET_BLOCKED");
@@ -222,18 +229,79 @@ describe("Refill budget management", () => {
     expect(budget.getBalance(oslo.id, "2026-12").availableMinor).toBe(100_000);
   });
 
+  it("starts a same-month purchase using its existing reservation even when the budget is fully reserved", () => {
+    const { refills, start, budget, store, addBox } = setup();
+    addBox("biscuits", 600_000);
+    const job = refills.reportEmpty("biscuits", november);
+    const originalReservation = store.budgetReservations.get(job.id);
+
+    start(job);
+
+    expect(job.status).toBe("IN_PROGRESS");
+    expect(store.budgetReservations.get(job.id)).toBe(originalReservation);
+    expect(budget.getBalance(oslo.id, "2026-11")).toMatchObject({
+      reservedMinor: 600_000, availableMinor: 0,
+    });
+  });
+
+  it("moves a reservation at purchase start before rechecking the waiting queue for the new month", () => {
+    const { refills, start, budget, store, addBox } = setup();
+    addBox("biscuits", 400_000);
+    addBox("nuts", 250_000);
+    const job = refills.reportEmpty("biscuits", november);
+    const waiting = refills.reportEmpty("nuts", november);
+
+    start(job, december);
+
+    expect(job.status).toBe("IN_PROGRESS");
+    expect(waiting.status).toBe("BUDGET_BLOCKED");
+    expect(store.budgetReservations.size).toBe(1);
+    expect(store.budgetReservations.get(job.id)).toEqual({
+      officeId: oslo.id, month: "2026-12", amountMinor: 400_000,
+    });
+    expect(budget.getBalance(oslo.id, "2026-11").reservedMinor).toBe(0);
+    expect(budget.getBalance(oslo.id, "2026-12")).toMatchObject({
+      reservedMinor: 400_000, availableMinor: 200_000,
+    });
+  });
+
+  it("keeps the job assigned and its prior reservation intact if the new month cannot cover it", () => {
+    const { refills, assignments, budget, store, addBox } = setup();
+    addBox("biscuits", 400_000);
+    addBox("nuts", 250_000);
+    const job = refills.reportEmpty("biscuits", november);
+    const waiting = refills.reportEmpty("nuts", november);
+    assignments.offerJob(job.id);
+    assignments.acceptOffer(job.id, volunteerId);
+    budget.recheckBlockedJobs(oslo.id, "2026-12");
+    expect(waiting.status).toBe("OPEN");
+
+    expect(() => assignments.startPurchase(job.id, volunteerId, december)).toThrow(/Insufficient budget/);
+    expect(job).toMatchObject({ status: "ASSIGNED", assignedVolunteerId: volunteerId });
+    expect(store.budgetReservations.get(job.id)).toMatchObject({
+      month: "2026-11", amountMinor: 400_000,
+    });
+    expect(budget.getBalance(oslo.id, "2026-11").reservedMinor).toBe(400_000);
+    expect(budget.getBalance(oslo.id, "2026-12").reservedMinor).toBe(250_000);
+
+    assignments.cancelJob(waiting.id, december);
+    expect(assignments.startPurchase(job.id, volunteerId, december).status).toBe("IN_PROGRESS");
+    expect(budget.getBalance(oslo.id, "2026-11").reservedMinor).toBe(0);
+    expect(budget.getBalance(oslo.id, "2026-12").reservedMinor).toBe(400_000);
+  });
+
   it("releases a previous month's reservation and posts the actual purchase in the new month", () => {
-    const { refills, assignments, start, budget, store, addBox } = setup(() => 580_000);
+    const { refills, assignments, start, budget, store, addBox } = setup();
     addBox("biscuits", 580_000);
     addBox("nuts", 100_000);
     const funded = refills.reportEmpty("biscuits", november);
     const blocked = refills.reportEmpty("nuts", november);
     start(funded);
 
-    assignments.completeJob(funded.id, volunteerId, december);
+    assignments.completeJob(funded.id, volunteerId, receipt(580_000, december));
 
     expect(store.purchaseExpenses.get(funded.id)).toMatchObject({
-      month: "2026-12", amountMinor: 580_000,
+      month: "2026-12", amountMinor: 580_000, purchaseDate: december, overrun: false,
     });
     expect(budget.getBalance(oslo.id, "2026-11")).toMatchObject({
       reservedMinor: 0, spentMinor: 0, availableMinor: 600_000,
@@ -244,17 +312,103 @@ describe("Refill budget management", () => {
     expect(blocked.status).toBe("BUDGET_BLOCKED");
   });
 
-  it("records the full expense when price variation exceeds the budget and protects against double completion", () => {
-    const { refills, assignments, start, budget, addBox } = setup(() => 660_000);
+  it("records the full overrun and protects the original receipt against duplicate completion", () => {
+    const { refills, assignments, start, budget, store, addBox } = setup();
     addBox("biscuits", 600_000);
     const funded = refills.reportEmpty("biscuits", november);
     start(funded);
 
     expect(() => assignments.cancelJob(funded.id, november)).toThrow(/awaiting a purchase/);
-    assignments.completeJob(funded.id, volunteerId, november);
-    expect(() => assignments.completeJob(funded.id, volunteerId, november)).toThrow(/IN_PROGRESS job/);
+    assignments.completeJob(funded.id, volunteerId, receipt(660_000));
+    const otherReceipt = { ...receipt(550_000), receiptReference: "second-receipt.jpg" };
+    expect(() => assignments.completeJob(funded.id, volunteerId, otherReceipt)).toThrow(/IN_PROGRESS job/);
+    expect(store.purchaseExpenses.size).toBe(1);
+    expect(store.purchaseExpenses.get(funded.id)).toMatchObject({
+      amountMinor: 660_000, receiptReference: "receipt-001.jpg", overrun: true,
+    });
     expect(budget.getBalance(oslo.id, "2026-11")).toMatchObject({
       reservedMinor: 0, spentMinor: 660_000, availableMinor: -60_000,
+    });
+  });
+
+  it.each([0, -1, 12.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1])(
+    "rejects an invalid purchase amount (%s) without changing spending or the job",
+    (amount) => {
+      const { refills, assignments, start, store, addBox } = setup();
+      addBox("biscuits", 100_000);
+      const job = refills.reportEmpty("biscuits", november);
+      start(job);
+      const reservation = store.budgetReservations.get(job.id);
+
+      expect(() => assignments.completeJob(job.id, volunteerId, receipt(amount))).toThrow(/Purchase amount/);
+      expect(job.status).toBe("IN_PROGRESS");
+      expect(store.budgetReservations.get(job.id)).toBe(reservation);
+      expect(store.purchaseExpenses.size).toBe(0);
+    },
+  );
+
+  it("rejects a purchase in another currency and allows retry with the office currency", () => {
+    const { refills, assignments, start, store, addBox } = setup();
+    addBox("biscuits", 100_000);
+    const job = refills.reportEmpty("biscuits", november);
+    start(job);
+    const details = receipt(100_000);
+
+    expect(() => assignments.completeJob(job.id, volunteerId, { ...details, currency: "INR" }))
+      .toThrow(/must match the office currency/);
+    expect(job.status).toBe("IN_PROGRESS");
+    expect(store.budgetReservations.get(job.id)?.amountMinor).toBe(100_000);
+    expect(store.purchaseExpenses.size).toBe(0);
+
+    expect(assignments.completeJob(job.id, volunteerId, details).status).toBe("COMPLETED");
+    expect(store.purchaseExpenses.get(job.id)?.currency).toBe("NOK");
+  });
+
+  it("requires a receipt reference and valid purchase date before changing the ledger", () => {
+    const { refills, assignments, start, store, addBox } = setup();
+    addBox("biscuits", 100_000);
+    const job = refills.reportEmpty("biscuits", november);
+    start(job);
+    const details = receipt(100_000);
+
+    expect(() => assignments.completeJob(job.id, volunteerId, { ...details, receiptReference: " " }))
+      .toThrow(/receipt reference/);
+    expect(() => assignments.completeJob(job.id, volunteerId, { ...details, purchaseDate: new Date(NaN) }))
+      .toThrow(/purchase date/);
+    expect(job.status).toBe("IN_PROGRESS");
+    expect(store.budgetReservations.get(job.id)?.amountMinor).toBe(100_000);
+    expect(store.purchaseExpenses.size).toBe(0);
+  });
+
+  it("flags spending above the job's estimate even if it fits the monthly budget", () => {
+    const { refills, assignments, start, budget, store, addBox } = setup();
+    addBox("biscuits", 100_000);
+    const job = refills.reportEmpty("biscuits", november);
+    start(job);
+
+    assignments.completeJob(job.id, volunteerId, receipt(125_000));
+
+    expect(store.purchaseExpenses.get(job.id)).toMatchObject({ amountMinor: 125_000, overrun: true });
+    expect(budget.getBalance(oslo.id, "2026-11")).toMatchObject({
+      reservedMinor: 0, spentMinor: 125_000, availableMinor: 475_000,
+    });
+  });
+
+  it("flags an expense that exceeds the receipt month's available budget even within its estimate", () => {
+    const { refills, assignments, start, budget, store, addBox } = setup();
+    addBox("biscuits", 400_000);
+    addBox("nuts", 300_000);
+    const job = refills.reportEmpty("biscuits", november);
+    start(job);
+    refills.reportEmpty("nuts", december);
+
+    assignments.completeJob(job.id, volunteerId, receipt(400_000, december));
+
+    expect(store.purchaseExpenses.get(job.id)).toMatchObject({
+      month: "2026-12", amountMinor: 400_000, overrun: true,
+    });
+    expect(budget.getBalance(oslo.id, "2026-12")).toMatchObject({
+      reservedMinor: 300_000, spentMinor: 400_000, availableMinor: -100_000,
     });
   });
 
@@ -276,15 +430,5 @@ describe("Refill budget management", () => {
     expect(second).toBe(third);
     expect(store.budgetReservations.size).toBe(1);
     expect(budget.getBalance(oslo.id, "2026-11").reservedMinor).toBe(400_000);
-  });
-});
-
-describe("simulatePurchasePrice", () => {
-  it("returns integer minor units and includes both limits of the ten percent range", () => {
-    expect(simulatePurchasePrice(100_000, () => 0)).toBe(90_000);
-    expect(simulatePurchasePrice(100_000, () => 0.5)).toBe(100_000);
-    expect(simulatePurchasePrice(100_000, () => 0.999999)).toBe(110_000);
-    expect(simulatePurchasePrice(9, () => 0)).toBe(9);
-    expect(simulatePurchasePrice(9, () => 0.999999)).toBe(9);
   });
 });

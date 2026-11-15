@@ -1,4 +1,4 @@
-import type { BudgetEntry, Currency, Office, RefillJob, SnackBox } from "./domain.ts";
+import type { BudgetEntry, Currency, Office, PurchaseDetails, RefillJob, SnackBox } from "./domain.ts";
 import type { InMemoryStore } from "./store.ts";
 
 interface BudgetBalance {
@@ -9,15 +9,8 @@ interface BudgetBalance {
   availableMinor: number;
 }
 
-type SimulatePrice = (estimateMinor: number) => number;
-
 export function accountingMonth(date: Date): string {
   return date.toISOString().slice(0, 7);
-}
-
-export function simulatePurchasePrice(estimateMinor: number, random = Math.random): number {
-  const variation = Math.floor(estimateMinor / 10);
-  return estimateMinor - variation + Math.floor(random() * (2 * variation + 1));
 }
 
 function requireMinorUnits(amount: number): number {
@@ -35,11 +28,9 @@ function validateMonth(month: string): void {
 
 export class BudgetService {
   private readonly store: InMemoryStore;
-  private readonly simulatePrice: SimulatePrice;
 
-  constructor(store: InMemoryStore, simulatePrice: SimulatePrice = simulatePurchasePrice) {
+  constructor(store: InMemoryStore) {
     this.store = store;
-    this.simulatePrice = simulatePrice;
   }
 
   getBalance(officeId: Office["id"], month: string): BudgetBalance {
@@ -61,12 +52,15 @@ export class BudgetService {
     return this.tryReserve(job, total, month);
   }
 
-  requireReservation(job: RefillJob): BudgetEntry {
-    const reservation = this.store.budgetReservations.get(job.id);
-    if (!reservation) {
-      throw new Error(`Refill job ${job.id} has no budget reservation`);
+  reserveForPurchase(job: RefillJob, month: string): void {
+    validateMonth(month);
+    const reservation = this.requireReservation(job);
+    // Replacing the entry moves the full reservation only after the target month can cover it.
+    const funded = reservation.month === month || this.tryReserve(job, reservation.amountMinor, month);
+    this.syncMonth(job.officeId, month);
+    if (!funded) {
+      throw new Error(`Insufficient budget to move refill job ${job.id}'s reservation to ${month}`);
     }
-    return reservation;
   }
 
   releaseReservation(job: RefillJob, month: string): void {
@@ -75,18 +69,41 @@ export class BudgetService {
     this.recheckBlockedJobs(job.officeId, month);
   }
 
-  reconcilePurchase(job: RefillJob, purchaseMonth: string): void {
+  reconcilePurchase(job: RefillJob, details: PurchaseDetails): void {
+    const { amountMinor, currency, receiptReference, purchaseDate } = details;
+    if (!Number.isSafeInteger(amountMinor) || amountMinor <= 0) {
+      throw new Error("Purchase amount must be a positive integer in minor units");
+    }
+    if (typeof receiptReference !== "string" || receiptReference.trim() === "") {
+      throw new Error("A receipt reference is required");
+    }
+    if (!(purchaseDate instanceof Date) || !Number.isFinite(purchaseDate.getTime())) {
+      throw new Error("A valid purchase date is required");
+    }
+    const purchaseMonth = accountingMonth(purchaseDate);
     validateMonth(purchaseMonth);
     const reservation = this.requireReservation(job);
-    const actualCost = requireMinorUnits(this.simulatePrice(reservation.amountMinor));
+    const balance = this.calculateBalance(job.officeId, purchaseMonth);
+    if (currency !== balance.currency) {
+      throw new Error(`Purchase currency must match the office currency (${balance.currency})`);
+    }
+    const reservedThisMonth = reservation.month === purchaseMonth ? reservation.amountMinor : 0;
+    const overrun = amountMinor > reservation.amountMinor ||
+      amountMinor > balance.availableMinor + reservedThisMonth;
+
     // Post the actual cost before giving the blocked job a chance to claim any released funds.
     this.store.purchaseExpenses.set(job.id, {
       officeId: job.officeId,
       month: purchaseMonth,
-      amountMinor: actualCost,
+      amountMinor,
+      currency,
+      receiptReference,
+      purchaseDate: new Date(purchaseDate),
+      overrun,
     });
     this.store.budgetReservations.delete(job.id);
-    this.recheckBlockedJobs(job.officeId, purchaseMonth);
+    const latestAffectedMonth = reservation.month > purchaseMonth ? reservation.month : purchaseMonth;
+    this.recheckBlockedJobs(job.officeId, latestAffectedMonth);
   }
 
   recheckBlockedJobs(officeId: Office["id"], month: string): void {
@@ -118,6 +135,14 @@ export class BudgetService {
       total += requireMinorUnits(box.estimatedCostMinor);
     }
     return total;
+  }
+
+  private requireReservation(job: RefillJob): BudgetEntry {
+    const reservation = this.store.budgetReservations.get(job.id);
+    if (!reservation) {
+      throw new Error(`Refill job ${job.id} has no budget reservation`);
+    }
+    return reservation;
   }
 
   private tryReserve(job: RefillJob, amountMinor: number, month: string): boolean {

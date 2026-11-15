@@ -138,6 +138,19 @@ function printBudget(officeId: Office["id"], accountingPeriod = month) {
   }]);
 }
 
+function printExpense(jobId: RefillJob["id"]) {
+  const expense = store.purchaseExpenses.get(jobId);
+  if (!expense) {
+    throw new Error(`Expected a recorded expense for demo job ${jobId}`);
+  }
+  console.table([{
+    amount: `${expense.currency} ${(expense.amountMinor / 100).toFixed(2)}`,
+    receipt: expense.receiptReference,
+    purchasedOn: expense.purchaseDate.toISOString().slice(0, 10),
+    overrun: expense.overrun,
+  }]);
+}
+
 console.log("Snack counter demo");
 console.log("Snack boxes");
 console.table(boxes);
@@ -181,9 +194,16 @@ printSnapshot("7. The crisps box empties during purchasing and gets a new OPEN j
 const bengaluruJob = service.reportEmpty("bengaluru-biscuits", budgetDate);
 printSnapshot("8. A report for Bengaluru's biscuits box creates a job for Bengaluru.");
 
-assignments.completeJob(osloJob.id, shopper.id, budgetDate);
+assignments.completeJob(osloJob.id, shopper.id, {
+  amountMinor: 117_250,
+  currency: "NOK",
+  receiptReference: "demo-receipts/oslo-supermarket.jpg",
+  purchaseDate: budgetDate,
+});
 service.reportEmpty("oslo-biscuits", budgetDate);
 printSnapshot(`9. ${shopper.name} completes the refill. A later biscuits report joins Oslo's open job.`);
+console.log("Recorded receipt details");
+printExpense(osloJob.id);
 printBudget(osloJob.officeId);
 console.log("Assignment history for the completed job");
 console.table(osloJob.assignmentHistory?.map((event) => ({
@@ -256,8 +276,14 @@ assignments.offerJob(blockedJob.id);
 const bengaluruShopper = currentOfferRecipient(blockedJob);
 assignments.acceptOffer(blockedJob.id, bengaluruShopper.id);
 assignments.startPurchase(blockedJob.id, bengaluruShopper.id, budgetDate);
-assignments.completeJob(blockedJob.id, bengaluruShopper.id, budgetDate);
-console.log(`\n15. ${bengaluruShopper.name} completes the refill. The simulated purchase replaces the reservation.`);
+assignments.completeJob(blockedJob.id, bengaluruShopper.id, {
+  amountMinor: 974_550,
+  currency: "INR",
+  receiptReference: "demo-receipts/bengaluru-wholesale.jpg",
+  purchaseDate: budgetDate,
+});
+console.log(`\n15. ${bengaluruShopper.name} submits the receipt. The actual expense replaces the reservation.`);
+printExpense(blockedJob.id);
 printBudget(blockedJob.officeId);
 
 const nextMonth = new Date(budgetDate);

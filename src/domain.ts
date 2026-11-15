@@ -8,11 +8,16 @@ export interface Office {
   monthlyBudget: number;
 }
 
+export type Attendance =
+  | { status: "ON_SITE"; officeId: Office["id"] }
+  | { status: "REMOTE" | "HOLIDAY" };
+
 export interface Employee {
   id: string;
   name: string;
   homeOfficeId: Office["id"];
   isVolunteer: boolean;
+  attendance?: Attendance;
 }
 
 export interface SnackBox {
@@ -41,4 +46,9 @@ export interface RefillJob {
   snackBoxIds: Set<SnackBox["id"]>;
   status: RefillJobStatus;
   createdAt: Date;
+  /** Kept on completed jobs for volunteer selection history. */
+  assignedVolunteerId?: Employee["id"];
+  completedAt?: Date;
+  /** Volunteers who declined or timed out during the current assignment cycle. */
+  excludedVolunteerIds?: Set<Employee["id"]>;
 }

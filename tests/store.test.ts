@@ -24,6 +24,7 @@ const snackBox: SnackBox = {
   id: "box-1",
   officeId: oslo.id,
   snackType: "Biscuits",
+  estimatedCostMinor: 45_000,
 };
 const reportedAt = new Date("2026-01-12T09:00:00Z");
 const report: EmptyBoxReport = {

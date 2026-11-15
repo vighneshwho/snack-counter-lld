@@ -10,9 +10,15 @@ const bengaluru: Office = {
   currency: "INR",
   monthlyBudget: 15_000,
 };
-const biscuits: SnackBox = { id: "biscuits", officeId: oslo.id, snackType: "Biscuits" };
-const chocolate: SnackBox = { id: "chocolate", officeId: oslo.id, snackType: "Chocolate" };
-const crisps: SnackBox = { id: "crisps", officeId: bengaluru.id, snackType: "Crisps" };
+const biscuits: SnackBox = {
+  id: "biscuits", officeId: oslo.id, snackType: "Biscuits", estimatedCostMinor: 45_000,
+};
+const chocolate: SnackBox = {
+  id: "chocolate", officeId: oslo.id, snackType: "Chocolate", estimatedCostMinor: 50_000,
+};
+const crisps: SnackBox = {
+  id: "crisps", officeId: bengaluru.id, snackType: "Crisps", estimatedCostMinor: 120_000,
+};
 
 function setup() {
   const store = new InMemoryStore();

@@ -20,7 +20,7 @@ function setup(volunteerIds = ["ada", "liv", "nora"]) {
   const store = new InMemoryStore();
   store.offices.set(oslo.id, oslo);
   for (const id of ["biscuits", "chocolate", "nuts", "crisps"]) {
-    store.snackBoxes.set(id, { id, officeId: oslo.id, snackType: id });
+    store.snackBoxes.set(id, { id, officeId: oslo.id, snackType: id, estimatedCostMinor: 40_000 });
   }
   for (const id of volunteerIds) {
     store.employees.set(id, volunteer(id));

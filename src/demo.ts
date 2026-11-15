@@ -1,4 +1,5 @@
 import { AssignmentService } from "./assignment-service.ts";
+import { accountingMonth, BudgetService } from "./budget-service.ts";
 import type { Attendance, Employee, Office, RefillJob, SnackBox } from "./domain.ts";
 import { RefillService } from "./refill-service.ts";
 import { InMemoryStore } from "./store.ts";
@@ -10,11 +11,14 @@ const offices: Office[] = [
   { id: "bengaluru", name: "Bengaluru", currency: "INR", monthlyBudget: 15_000 },
 ];
 const boxes: SnackBox[] = [
-  { id: "oslo-biscuits", officeId: "oslo", snackType: "Biscuits" },
-  { id: "oslo-chocolate", officeId: "oslo", snackType: "Chocolate" },
-  { id: "oslo-nuts", officeId: "oslo", snackType: "Mixed nuts" },
-  { id: "oslo-crisps", officeId: "oslo", snackType: "Crisps" },
-  { id: "bengaluru-biscuits", officeId: "bengaluru", snackType: "Biscuits" },
+  { id: "oslo-biscuits", officeId: "oslo", snackType: "Biscuits", estimatedCostMinor: 35_000 },
+  { id: "oslo-chocolate", officeId: "oslo", snackType: "Chocolate", estimatedCostMinor: 42_000 },
+  { id: "oslo-nuts", officeId: "oslo", snackType: "Mixed nuts", estimatedCostMinor: 39_000 },
+  { id: "oslo-crisps", officeId: "oslo", snackType: "Crisps", estimatedCostMinor: 32_000 },
+  { id: "bengaluru-biscuits", officeId: "bengaluru", snackType: "Biscuits", estimatedCostMinor: 300_000 },
+  { id: "bengaluru-namkeen", officeId: "bengaluru", snackType: "Namkeen", estimatedCostMinor: 750_000 },
+  { id: "bengaluru-chikki", officeId: "bengaluru", snackType: "Chikki", estimatedCostMinor: 500_000 },
+  { id: "bengaluru-makhana", officeId: "bengaluru", snackType: "Makhana", estimatedCostMinor: 500_000 },
 ];
 const osloVolunteerNames = [
   "Ingrid Solberg", "Marius Dahl", "Sigrid Hansen", "Jonas Berg", "Nora Larsen",
@@ -89,9 +93,12 @@ for (const employee of nonVolunteers) {
   store.employees.set(employee.id, employee);
 }
 
-const service = new RefillService(store);
+const budget = new BudgetService(store);
+const service = new RefillService(store, budget);
 const volunteerSelection = new VolunteerSelectionService(store);
-const assignments = new AssignmentService(store);
+const assignments = new AssignmentService(store, budget);
+const budgetDate = new Date();
+const month = accountingMonth(budgetDate);
 
 function currentOfferRecipient(job: RefillJob): Employee {
   const volunteer = job.offeredVolunteerId === undefined
@@ -119,19 +126,32 @@ function printSnapshot(message: string) {
   })));
 }
 
+function printBudget(officeId: Office["id"], accountingPeriod = month) {
+  const balance = budget.getBalance(officeId, accountingPeriod);
+  const money = (amount: number) => `${balance.currency} ${(amount / 100).toFixed(2)}`;
+  console.log(`${officeId} budget for ${accountingPeriod}`);
+  console.table([{
+    budget: money(balance.budgetMinor),
+    reserved: money(balance.reservedMinor),
+    spent: money(balance.spentMinor),
+    remaining: money(balance.availableMinor),
+  }]);
+}
+
 console.log("Snack counter demo");
 console.log("Snack boxes");
 console.table(boxes);
 
-const osloJob = service.reportEmpty("oslo-biscuits");
+const osloJob = service.reportEmpty("oslo-biscuits", budgetDate);
 printSnapshot("1. A report for Oslo's biscuits box creates an OPEN job.");
+printBudget(osloJob.officeId);
 
-service.reportEmpty("oslo-biscuits");
+service.reportEmpty("oslo-biscuits", budgetDate);
 printSnapshot("2. The report is repeated. The job still lists the biscuits box once.");
 
 assignments.offerJob(osloJob.id);
 const firstRecipient = currentOfferRecipient(osloJob);
-service.reportEmpty("oslo-chocolate");
+service.reportEmpty("oslo-chocolate", budgetDate);
 printSnapshot(`3. ${firstRecipient.name} receives the offer. The chocolate box joins the same job.`);
 
 assignments.declineOffer(osloJob.id, firstRecipient.id);
@@ -143,27 +163,28 @@ nextRecipient.attendance = { status: "REMOTE" };
 assignments.reassignJob(osloJob.id);
 const shopper = currentOfferRecipient(osloJob);
 assignments.acceptOffer(osloJob.id, shopper.id);
-service.reportEmpty("oslo-nuts");
+service.reportEmpty("oslo-nuts", budgetDate);
 console.log(`\n5. ${nextRecipient.name} becomes unavailable before shopping. ${shopper.name} accepts the replacement offer.`);
 const assignedJob = assignments.getJob(osloJob.id);
 console.log("Latest box list before starting:", [...assignedJob.snackBoxIds].join(", "));
 
-const purchase = assignments.startPurchase(osloJob.id, shopper.id);
+const purchase = assignments.startPurchase(osloJob.id, shopper.id, budgetDate);
 console.log(`\n6. ${shopper.name} starts purchasing. Job ${purchase.id} is ${purchase.status}.`);
 console.log("Locked shopping list");
 console.table(boxes.filter((box) => purchase.snackBoxIds.has(box.id)).map((box) => ({
   boxId: box.id,
   snack: box.snackType,
 })));
-service.reportEmpty("oslo-crisps");
+service.reportEmpty("oslo-crisps", budgetDate);
 printSnapshot("7. The crisps box empties during purchasing and gets a new OPEN job.");
 
-const bengaluruJob = service.reportEmpty("bengaluru-biscuits");
+const bengaluruJob = service.reportEmpty("bengaluru-biscuits", budgetDate);
 printSnapshot("8. A report for Bengaluru's biscuits box creates a job for Bengaluru.");
 
-assignments.completeJob(osloJob.id, shopper.id);
-service.reportEmpty("oslo-biscuits");
+assignments.completeJob(osloJob.id, shopper.id, budgetDate);
+service.reportEmpty("oslo-biscuits", budgetDate);
 printSnapshot(`9. ${shopper.name} completes the refill. A later biscuits report joins Oslo's open job.`);
+printBudget(osloJob.officeId);
 console.log("Assignment history for the completed job");
 console.table(osloJob.assignmentHistory?.map((event) => ({
   event: event.type,
@@ -218,3 +239,30 @@ bengaluruJob.excludedVolunteerIds = new Set(bengaluruOnSiteVolunteers.map((emplo
 const afterExclusions = assignments.offerJob(bengaluruJob.id);
 console.log("Bengaluru job status:", afterExclusions.status);
 console.log("Needs attention:", afterExclusions.needsAttention);
+
+console.log("\n13. Namkeen fits the Bengaluru reservation. Chikki and makhana join one blocked job.");
+service.reportEmpty("bengaluru-namkeen", budgetDate);
+const blockedJob = service.reportEmpty("bengaluru-chikki", budgetDate);
+service.reportEmpty("bengaluru-makhana", budgetDate);
+console.log("Job status:", blockedJob.status, "Boxes:", [...blockedJob.snackBoxIds].join(", "));
+printBudget(bengaluruJob.officeId);
+
+console.log("\n14. Cancelling the original Bengaluru job frees enough budget for both blocked boxes.");
+assignments.cancelJob(bengaluruJob.id, budgetDate);
+console.log("Previously blocked job status:", blockedJob.status);
+printBudget(blockedJob.officeId);
+
+assignments.offerJob(blockedJob.id);
+const bengaluruShopper = currentOfferRecipient(blockedJob);
+assignments.acceptOffer(blockedJob.id, bengaluruShopper.id);
+assignments.startPurchase(blockedJob.id, bengaluruShopper.id, budgetDate);
+assignments.completeJob(blockedJob.id, bengaluruShopper.id, budgetDate);
+console.log(`\n15. ${bengaluruShopper.name} completes the refill. The simulated purchase replaces the reservation.`);
+printBudget(blockedJob.officeId);
+
+const nextMonth = new Date(budgetDate);
+nextMonth.setUTCDate(1);
+nextMonth.setUTCMonth(nextMonth.getUTCMonth() + 1);
+console.log("\n16. The next month opens with its full budget. This month's expense stays on record.");
+printBudget(blockedJob.officeId, accountingMonth(nextMonth));
+printBudget(blockedJob.officeId);

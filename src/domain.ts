@@ -24,6 +24,7 @@ export interface SnackBox {
   id: string;
   officeId: Office["id"];
   snackType: string;
+  estimatedCostMinor: number;
 }
 
 export interface EmptyBoxReport {
@@ -35,10 +36,12 @@ export interface EmptyBoxReport {
 
 export type RefillJobStatus =
   | "OPEN"
+  | "BUDGET_BLOCKED"
   | "OFFERED"
   | "ASSIGNED"
   | "IN_PROGRESS"
-  | "COMPLETED";
+  | "COMPLETED"
+  | "CANCELLED";
 
 export function isActiveAssignment(status: RefillJobStatus): boolean {
   return status === "ASSIGNED" || status === "IN_PROGRESS";
@@ -64,4 +67,10 @@ export interface RefillJob {
   assignmentHistory?: AssignmentEvent[];
   /** Volunteers who declined or were replaced during the current assignment cycle. */
   excludedVolunteerIds?: Set<Employee["id"]>;
+}
+
+export interface BudgetEntry {
+  officeId: Office["id"];
+  month: string;
+  amountMinor: number;
 }

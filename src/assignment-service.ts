@@ -1,3 +1,4 @@
+import { accountingMonth, BudgetService } from "./budget-service.ts";
 import {
   isActiveAssignment,
   type AssignmentEvent,
@@ -10,10 +11,12 @@ import { VolunteerSelectionService } from "./volunteer-selection-service.ts";
 export class AssignmentService {
   private readonly store: InMemoryStore;
   private readonly selection: VolunteerSelectionService;
+  private readonly budget: BudgetService;
 
-  constructor(store: InMemoryStore) {
+  constructor(store: InMemoryStore, budget = new BudgetService(store)) {
     this.store = store;
     this.selection = new VolunteerSelectionService(store);
+    this.budget = budget;
   }
 
   /** Reads the latest requirements, including boxes reported after an offer or acceptance. */
@@ -66,23 +69,40 @@ export class AssignmentService {
     return this.replaceVolunteer(job, volunteerId, "REASSIGNED");
   }
 
-  startPurchase(jobId: RefillJob["id"], volunteerId: Employee["id"]): RefillJob {
+  startPurchase(jobId: RefillJob["id"], volunteerId: Employee["id"], asOf: Date = new Date()): RefillJob {
     const job = this.getJob(jobId);
     if (job.status !== "ASSIGNED" || job.assignedVolunteerId !== volunteerId) {
       throw new Error(`Only the assigned volunteer can start purchasing for an ASSIGNED job: ${jobId}`);
     }
+    this.budget.requireReservation(job);
+    this.budget.syncMonth(job.officeId, accountingMonth(asOf));
     // RefillService uses IN_PROGRESS to route new boxes to another job.
     job.status = "IN_PROGRESS";
     return job;
   }
 
-  completeJob(jobId: RefillJob["id"], volunteerId: Employee["id"]): RefillJob {
+  completeJob(jobId: RefillJob["id"], volunteerId: Employee["id"], asOf: Date = new Date()): RefillJob {
     const job = this.getJob(jobId);
     if (job.status !== "IN_PROGRESS" || job.assignedVolunteerId !== volunteerId) {
       throw new Error(`Only the assigned volunteer can complete an IN_PROGRESS job: ${jobId}`);
     }
+    this.budget.reconcilePurchase(job, accountingMonth(asOf));
     job.status = "COMPLETED";
-    job.completedAt = new Date();
+    job.completedAt = new Date(asOf);
+    return job;
+  }
+
+  cancelJob(jobId: RefillJob["id"], asOf: Date = new Date()): RefillJob {
+    const job = this.getJob(jobId);
+    if (job.status === "IN_PROGRESS" || job.status === "COMPLETED" || job.status === "CANCELLED") {
+      throw new Error(`Only jobs awaiting a purchase can be cancelled: ${jobId}`);
+    }
+    const month = accountingMonth(asOf);
+    job.status = "CANCELLED";
+    job.needsAttention = false;
+    delete job.offeredVolunteerId;
+    delete job.assignedVolunteerId;
+    this.budget.releaseReservation(job, month);
     return job;
   }
 

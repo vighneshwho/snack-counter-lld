@@ -1,3 +1,6 @@
+<img width="1014" height="611" alt="Screenshot 2026-11-15 at 11 40 32 PM" src="https://github.com/user-attachments/assets/3825a732-fe2c-4b11-b9cb-6fda4d07aa3c" />
+
+
 # Snack Counter Automation
 
 A small TypeScript implementation of the snack refill workflow for Oslo and Bengaluru. It runs in memory with mock chat and HR services. The goal is to demonstrate the business rules and their edge cases, not build a deployable product.

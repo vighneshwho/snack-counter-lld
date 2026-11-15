@@ -24,6 +24,7 @@ export interface SnackBox {
 export interface EmptyBoxReport {
   id: string;
   snackBoxId: SnackBox["id"];
+  refillJobId: RefillJob["id"];
   reportedAt: Date;
 }
 

@@ -5,8 +5,8 @@ import type {
   Office,
   RefillJob,
   SnackBox,
-} from "../src/domain.js";
-import { InMemoryStore } from "../src/store.js";
+} from "../src/domain.ts";
+import { InMemoryStore } from "../src/store.ts";
 
 const oslo: Office = {
   id: "oslo",
@@ -29,6 +29,7 @@ const reportedAt = new Date("2026-01-12T09:00:00Z");
 const report: EmptyBoxReport = {
   id: "report-1",
   snackBoxId: snackBox.id,
+  refillJobId: "job-1",
   reportedAt,
 };
 
@@ -36,7 +37,7 @@ describe("InMemoryStore", () => {
   it("stores and retrieves all five record types by ID", () => {
     const store = new InMemoryStore();
     const job: RefillJob = {
-      id: "job-1",
+      id: report.refillJobId,
       officeId: oslo.id,
       snackBoxIds: new Set([snackBox.id]),
       status: "OPEN",
@@ -81,7 +82,7 @@ describe("InMemoryStore", () => {
       reportedAt: new Date("2026-01-12T09:05:00Z"),
     };
     const job: RefillJob = {
-      id: "job-1",
+      id: report.refillJobId,
       officeId: oslo.id,
       snackBoxIds: new Set([report.snackBoxId, secondReport.snackBoxId]),
       status: "OPEN",

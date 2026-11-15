@@ -4,7 +4,7 @@ import type {
   Office,
   RefillJob,
   SnackBox,
-} from "./domain.js";
+} from "./domain.ts";
 
 export class InMemoryStore {
   readonly offices = new Map<Office["id"], Office>();

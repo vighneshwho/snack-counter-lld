@@ -1,3 +1,4 @@
+import { AssignmentService } from "./assignment-service.ts";
 import type { Attendance, Employee, Office, RefillJob, SnackBox } from "./domain.ts";
 import { RefillService } from "./refill-service.ts";
 import { InMemoryStore } from "./store.ts";
@@ -11,6 +12,7 @@ const offices: Office[] = [
 const boxes: SnackBox[] = [
   { id: "oslo-biscuits", officeId: "oslo", snackType: "Biscuits" },
   { id: "oslo-chocolate", officeId: "oslo", snackType: "Chocolate" },
+  { id: "oslo-nuts", officeId: "oslo", snackType: "Mixed nuts" },
   { id: "oslo-crisps", officeId: "oslo", snackType: "Crisps" },
   { id: "bengaluru-biscuits", officeId: "bengaluru", snackType: "Biscuits" },
 ];
@@ -89,6 +91,17 @@ for (const employee of nonVolunteers) {
 
 const service = new RefillService(store);
 const volunteerSelection = new VolunteerSelectionService(store);
+const assignments = new AssignmentService(store);
+
+function currentOfferRecipient(job: RefillJob): Employee {
+  const volunteer = job.offeredVolunteerId === undefined
+    ? undefined
+    : store.employees.get(job.offeredVolunteerId);
+  if (!volunteer) {
+    throw new Error(`Expected an offer for demo job ${job.id}`);
+  }
+  return volunteer;
+}
 
 function printSnapshot(message: string) {
   console.log(`\n${message}`);
@@ -107,7 +120,6 @@ function printSnapshot(message: string) {
 }
 
 console.log("Snack counter demo");
-console.log("Job status changes are simulated directly in this demo.");
 console.log("Snack boxes");
 console.table(boxes);
 
@@ -117,23 +129,50 @@ printSnapshot("1. A report for Oslo's biscuits box creates an OPEN job.");
 service.reportEmpty("oslo-biscuits");
 printSnapshot("2. The report is repeated. The job still lists the biscuits box once.");
 
-osloJob.status = "OFFERED";
+assignments.offerJob(osloJob.id);
+const firstRecipient = currentOfferRecipient(osloJob);
 service.reportEmpty("oslo-chocolate");
-printSnapshot("3. After the job is marked OFFERED, the chocolate box joins it.");
+printSnapshot(`3. ${firstRecipient.name} receives the offer. The chocolate box joins the same job.`);
 
-osloJob.status = "IN_PROGRESS";
+assignments.declineOffer(osloJob.id, firstRecipient.id);
+const nextRecipient = currentOfferRecipient(osloJob);
+assignments.acceptOffer(osloJob.id, nextRecipient.id);
+console.log(`\n4. ${firstRecipient.name} declines. ${nextRecipient.name} accepts the same job.`);
+
+nextRecipient.attendance = { status: "REMOTE" };
+assignments.reassignJob(osloJob.id);
+const shopper = currentOfferRecipient(osloJob);
+assignments.acceptOffer(osloJob.id, shopper.id);
+service.reportEmpty("oslo-nuts");
+console.log(`\n5. ${nextRecipient.name} becomes unavailable before shopping. ${shopper.name} accepts the replacement offer.`);
+const assignedJob = assignments.getJob(osloJob.id);
+console.log("Latest box list before starting:", [...assignedJob.snackBoxIds].join(", "));
+
+const purchase = assignments.startPurchase(osloJob.id, shopper.id);
+console.log(`\n6. ${shopper.name} starts purchasing. Job ${purchase.id} is ${purchase.status}.`);
+console.log("Locked shopping list");
+console.table(boxes.filter((box) => purchase.snackBoxIds.has(box.id)).map((box) => ({
+  boxId: box.id,
+  snack: box.snackType,
+})));
 service.reportEmpty("oslo-crisps");
-printSnapshot("4. Purchasing starts and locks the first job. The crisps box gets a new OPEN job.");
+printSnapshot("7. The crisps box empties during purchasing and gets a new OPEN job.");
 
 const bengaluruJob = service.reportEmpty("bengaluru-biscuits");
-printSnapshot("5. A report for Bengaluru's biscuits box creates a job for Bengaluru.");
+printSnapshot("8. A report for Bengaluru's biscuits box creates a job for Bengaluru.");
 
-osloJob.status = "COMPLETED";
+assignments.completeJob(osloJob.id, shopper.id);
 service.reportEmpty("oslo-biscuits");
-printSnapshot("6. After the first job completes, Oslo's biscuits box empties again and joins the open job.");
+printSnapshot(`9. ${shopper.name} completes the refill. A later biscuits report joins Oslo's open job.`);
+console.log("Assignment history for the completed job");
+console.table(osloJob.assignmentHistory?.map((event) => ({
+  event: event.type,
+  volunteer: store.employees.get(event.volunteerId)?.name,
+  occurredAt: event.occurredAt.toISOString(),
+})));
 
 const asOf = new Date("2026-11-15T09:00:00Z");
-console.log("\n7. Compare volunteers for the Bengaluru job.");
+console.log("\n10. Compare volunteers for the Bengaluru job.");
 console.log(
   `Roster includes ${osloVolunteerNames.length} Oslo volunteers, ` +
   `${bengaluruVolunteerNames.length} Bengaluru volunteers, and ${nonVolunteers.length} non-volunteers.`,
@@ -146,7 +185,7 @@ console.table([...store.employees.values()].map((employee) => ({
   currentOffice: employee.attendance?.status === "ON_SITE" ? employee.attendance.officeId : "",
 })));
 const firstChoice = volunteerSelection.selectVolunteer(bengaluruJob, asOf);
-console.log("With no recorded volunteer history, employee ID breaks the tie.");
+console.log("The Bengaluru candidates have equal refill history. Employee ID breaks the tie.");
 console.log("Selected volunteer:", firstChoice?.name ?? "None");
 
 const bengaluruOnSiteVolunteers = [...store.employees.values()].filter((employee) =>
@@ -155,7 +194,7 @@ const bengaluruOnSiteVolunteers = [...store.employees.values()].filter((employee
   employee.attendance.officeId === bengaluruJob.officeId,
 );
 
-console.log("\n8. Add one recent completion for each on-site Bengaluru volunteer based in Bengaluru.");
+console.log("\n11. Add one recent completion for each on-site Bengaluru volunteer based in Bengaluru.");
 for (const volunteer of bengaluruOnSiteVolunteers) {
   if (volunteer.homeOfficeId === bengaluruJob.officeId) {
     const completedRefill: RefillJob = {
@@ -174,8 +213,8 @@ const afterHistory = volunteerSelection.selectVolunteer(bengaluruJob, asOf);
 console.log("Selected volunteer:", afterHistory?.name ?? "None");
 console.log("The visitor from Oslo has the lightest recent refill workload.");
 
-console.log("\n9. Simulate cycle exclusions for every on-site volunteer in Bengaluru.");
+console.log("\n12. Simulate cycle exclusions for every on-site volunteer in Bengaluru.");
 bengaluruJob.excludedVolunteerIds = new Set(bengaluruOnSiteVolunteers.map((employee) => employee.id));
-const afterExclusions = volunteerSelection.selectVolunteer(bengaluruJob, asOf);
-console.log("Selected volunteer:", afterExclusions?.name ?? "None");
-console.log("Bengaluru job status:", bengaluruJob.status);
+const afterExclusions = assignments.offerJob(bengaluruJob.id);
+console.log("Bengaluru job status:", afterExclusions.status);
+console.log("Needs attention:", afterExclusions.needsAttention);

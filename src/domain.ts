@@ -40,15 +40,28 @@ export type RefillJobStatus =
   | "IN_PROGRESS"
   | "COMPLETED";
 
+export function isActiveAssignment(status: RefillJobStatus): boolean {
+  return status === "ASSIGNED" || status === "IN_PROGRESS";
+}
+
+export interface AssignmentEvent {
+  type: "OFFERED" | "ACCEPTED" | "DECLINED" | "REASSIGNED";
+  volunteerId: Employee["id"];
+  occurredAt: Date;
+}
+
 export interface RefillJob {
   id: string;
   officeId: Office["id"];
   snackBoxIds: Set<SnackBox["id"]>;
   status: RefillJobStatus;
   createdAt: Date;
+  offeredVolunteerId?: Employee["id"];
   /** Kept on completed jobs for volunteer selection history. */
   assignedVolunteerId?: Employee["id"];
   completedAt?: Date;
-  /** Volunteers who declined or timed out during the current assignment cycle. */
+  needsAttention?: boolean;
+  assignmentHistory?: AssignmentEvent[];
+  /** Volunteers who declined or were replaced during the current assignment cycle. */
   excludedVolunteerIds?: Set<Employee["id"]>;
 }

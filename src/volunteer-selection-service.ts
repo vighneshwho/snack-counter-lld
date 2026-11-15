@@ -1,4 +1,4 @@
-import type { Employee, RefillJob } from "./domain.ts";
+import { isActiveAssignment, type Employee, type RefillJob } from "./domain.ts";
 import type { InMemoryStore } from "./store.ts";
 
 const recentRefillWindowMs = 30 * 24 * 60 * 60 * 1000;
@@ -31,7 +31,7 @@ export class VolunteerSelectionService {
       if (volunteerId === undefined) {
         continue;
       }
-      if (refill.status === "ASSIGNED" || refill.status === "IN_PROGRESS") {
+      if (isActiveAssignment(refill.status)) {
         busyVolunteers.add(volunteerId);
       }
       if (refill.status === "COMPLETED" && refill.completedAt) {
